@@ -6,7 +6,7 @@ from pathlib import Path
 
 if __name__ == "__main__":
     if sys.argv[1] == "--help":
-        print("Run with python renamer.py db_file_path puid new_extension.")
+        print("Run with python renamer.py db_file_path puid new_extension_without_period_sign.")
     else:
         db_path = sys.argv[1]
         puid = sys.argv[2]
