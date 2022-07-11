@@ -6,16 +6,17 @@ from pathlib import Path
 
 if __name__ == "__main__":
     if sys.argv[1] == "--help":
-        print("Run with python renamer.py db_file_path puid new_extension_without_period_sign.")
+        print(
+            "Run with python renamer.py db_file_path puid new_extension_without_period_sign."
+        )
     else:
         db_path = sys.argv[1]
         puid = sys.argv[2]
         new_suffix = sys.argv[3]
-        
+
         ROOTPATH = Path(db_path).parent.parent
-        
         DB_QUERY_GET_FILES = f"SELECT relative_path, uuid FROM Files WHERE puid = '{puid}' AND warning = 'Extension mismatch';"
-        
+
         connection = sqlite3.connect(db_path)
         cursor = connection.cursor()
 
@@ -33,4 +34,3 @@ if __name__ == "__main__":
             except FileNotFoundError:
                 print("Could not find the file with path: " + str(absolute_path))
         connection.close()
-        
