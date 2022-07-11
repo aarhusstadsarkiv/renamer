@@ -27,7 +27,7 @@ if __name__ == "__main__":
             try:
                 absolute_path.rename(str(absolute_path) + "." + new_suffix)
                 new_rel_path = row[0] + "." + new_suffix
-                update_query = f"UPDATE Files SET relative_path = '{new_rel_path}', warning = 'Corrected extension mismatch'  WHERE Files.uuid = '{row[1]}'"
+                update_query = f"UPDATE Files SET relative_path = '{new_rel_path}', warning = 'Corrected extension mismatch' WHERE Files.uuid = '{row[1]}'"
                 cursor.execute(update_query)
                 connection.commit()
             except FileNotFoundError:
