@@ -7,8 +7,6 @@ authors = ["Claus Juhl Knudsen <cjk@aarhus.dk>"]
 [tool.poetry.dependencies]
 python = "*"
 
-[tool.poetry.dev-dependencies]
-
 [tool.poetry.scripts]
 renamer = 'renamer:main'
 
