@@ -5,7 +5,7 @@ description = "cli to help with renaming original ingested files with missing or
 authors = ["Claus Juhl Knudsen <cjk@aarhus.dk>"]
 
 [tool.poetry.dependencies]
-python = ">=3.8, <"
+python = ">=3.8, <=3.11"
 xmltodict = "^0.13.0"
 requests = "^2.28.1"
 
