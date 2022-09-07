@@ -1,0 +1,70 @@
+[
+    {
+        "bof": "(?i)^576F726450726F0DFB000000000000000005985C8172030040CCC1BFFFBDF970",
+        "puid": "x-fmt/340",
+        "signature": "Lotus WordPro Document",
+        "extension": ".lwp"
+    },
+    {
+        "bof": "(?i)^00001A000(3|4|5)10040000000000",
+        "puid": "aca-fmt/1",
+        "signature": "Lotus 1-2-3 Spreadsheet",
+        "extension": ".123"
+    },
+    {
+        "bof": "(?i)(50|70)726F67(49|69)64[0-9A-F]{2,20}576f72642e446f63756d656e74",
+        "puid": "aca-fmt/2",
+        "signature": "Microsoft Word Markup",
+        "extension": ".doc"
+    },
+    {
+        "bof": "(?i)(50|70)726F67(49|69)64[0-9A-F]{2,18}457863656C2E5368656574",
+        "puid": "aca-fmt/3",
+        "signature": "Microsoft Excel Markup",
+        "extension": ".xls"
+    },
+    {
+        "bof": "(?i)75726e3a736368656d61732d6d6963726f736f66742d636f6d3a6f66666963653a657863656c",
+        "puid": "aca-fmt/3",
+        "signature": "Microsoft Excel Markup",
+        "extension": ".xls"
+    },
+    {
+        "bof": "(?i)^1a000003000014000000",
+        "puid": "aca-fmt/5",
+        "signature": "Lotus Notes Template",
+        "extension": ".ntf"
+    },
+    {
+        "bof": "(?i)^0300000041505052",
+        "puid": "aca-fmt/6",
+        "signature": "Lotus Approach Index File",
+        "extension": ".adx"
+    },
+    {
+        "bof": "(?i)^1a000004000029000000",
+        "eof": "(?i)bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "puid": "aca-fmt/8",
+        "operator": "AND",
+        "signature": "Lotus Notes Database",
+        "extension": ".nsf"
+    },
+    {
+        "bof": "(?i)4D696E644d616E61676572",
+        "puid": "aca-fmt/4",
+        "signature": "MindManager Mind Map",
+        "extension": ".mmap"
+    },
+    {
+        "bof": "(?i)010000002E010000(43|03)000000",
+        "puid": "aca-fmt/7",
+        "signature": "ID File",
+        "extension": ".id"
+    },
+    {
+        "bof": "(?i)474946383961",
+        "puid": "fmt/4",
+        "signature": "GIF 1989a",
+        "extension": ".gif"
+    }
+]
