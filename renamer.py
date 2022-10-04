@@ -9,8 +9,26 @@ import shutil
 import xmltodict
 import xml.etree.ElementTree as ET
 
-def main():
-    arg_parser = argparse.ArgumentParser(prog='renamer',
+def puidUpdater():
+# checks if the extension files can be updated if the --update flag is set
+    try:
+        print("Updating PUID's from the National Archives")
+        print("If you wish to update the signatures from ACA,"
+        "you need to update the file manualy")
+        respons_national_arc = requests.head("https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml")
+        if respons_national_arc.status_code == 200:
+            response_national_arc = requests.get("https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml")
+            with open('national_archive.xml', 'w', encoding='utf-8') as national_arc_file:
+                national_arc_file.write(response_national_arc.content.__str__())
+                national_arc_file.close()
+        print("Done updating PUID's")
+    except Exception as e:
+        print(f"Error updating extension files: {e}\n")
+        print("Renaming files based on current extension file")
+
+# handles the parsing of arguments from user input
+def argParser() -> argparse.Namespace:
+    arg_parser: argparse.ArgumentParser = argparse.ArgumentParser(prog='renamer',
                                     description="cli tool to help with renaming original ingested files with missing or wrong extension",
                                     usage="%(prog)s [options] path puid suffix",
                                     epilog="")
@@ -53,39 +71,25 @@ def main():
         arg_parser.add_argument("--update_puid",
                             action="store_true",
                             help="updates the puid's associeted with file extensions from the relevant repositories")
+    return arg_parser.parse_args()
 
-    args = arg_parser.parse_args()
-
-    # checks if the extension files can be updated if the --update flag is set
-    if args.update_puid:
-        try:
-            respons_national_arc = requests.head("https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml")
-            if respons_national_arc.status_code == 200:
-                response_national_arc = requests.get("https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml")
-                with open('national_archive.xml', 'w', encoding='utf-8') as national_arc_file:
-                    national_arc_file.write(response_national_arc.content)
-                    national_arc_file.close()
-            
-            respons_aca = requests.get("https://raw.githubusercontent.com/aarhusstadsarkiv/digiarch/master/digiarch/core/custom_sigs.json")
-            with open("aca_file_extension.json", "w", encoding="utf-8") as aca_file:
-                data_json = respons_aca.json()
-                json.dump(data_json, fp=aca_file,indent=4)
-                aca_file.close()
-        except Exception as e:
-            print(f"Error updating extension files: {e}")
-
-
+def getPuidsFromJson() -> tuple[dict[str, str], dict[str, str]]:
     # creates a dict overview of the puid and the file extensions associated with them
-    xml_parser = ET.XMLParser(encoding="utf-8")
-    tree = ET.parse("national_archive.xml", parser=xml_parser)
+    # TODO: Find out if there is a better way to make this work in mypy. Rn its just 
+    # ugly
+    xml_parser: ET.XMLParser = ET.XMLParser(encoding="utf-8")
+    tree: ET.ElementTree = ET.parse("national_archive.xml", parser=xml_parser)
     xml_data = tree.getroot()
     xmlstr: str = ET.tostring(xml_data, encoding='utf-8', method='xml')
-    data_dict = dict(xmltodict.parse(xmlstr))
-    puid_to_extensions_dict: dict = {}
+    data_dict = dict(xmltodict.parse(xmlstr))  # type: ignore
+    signature_file = data_dict.get('ns0:FFSignatureFile') 
+    file_format_dict = signature_file.get('ns0:FileFormatCollection')  # type: ignore
+    list_of_file_formats = file_format_dict.get('ns0:FileFormat')
+    puid_to_extensions_dict: dict[str, str] = {}
 
-    for entry in data_dict.get('ns0:FFSignatureFile').get('ns0:FileFormatCollection').get('ns0:FileFormat'):
+    for entry in list_of_file_formats:
         puid: str = entry.get('@PUID')
-        extension = entry.get('ns0:Extension')
+        extension: str = entry.get('ns0:Extension')
         if isinstance(extension, str):
             puid_to_extensions_dict[puid] = extension
         elif isinstance(extension, list):
@@ -94,7 +98,7 @@ def main():
     with open("aca_file_extension.json", "r", encoding="utf-8") as file:
         aca_puid_json = json.load(file)
     
-    aca_puid_dict: dict = {}
+    aca_puid_dict: dict[str, str] = {}
     for entry in aca_puid_json:
         aca_puid: str = entry.get("puid")
         extension = entry.get("extension")
@@ -103,14 +107,29 @@ def main():
         elif isinstance(extension, list):
             aca_puid_dict[aca_puid] = extension[0].replace(".", "")
 
-    # actual functionality of the script. Split in two cases: dryrun and normal run¨
+    return aca_puid_dict, puid_to_extensions_dict
+
+ 
+
+
+def main():
+    args: argparse.Namespace = argParser()
+
+    #Checks to see if the --update flag is set and updates if it is
+    if args.update:
+        puidUpdater()
+
+    #Loads the PUID's into a dict from the json file from the national archives
+    tuple_of_puid_dict: tuple[dict[str, str], dict[str, str]] = getPuidsFromJson()
+
+   # actual functionality of the script. Split in two cases: dryrun and normal run¨
     if args.dryrun:
         db_path = args.Path
         db_parent_direct = Path(db_path).parent
         ROOTPATH = Path(db_path).parent.parent
         new_directory_absolute_path: Path = db_parent_direct  / "copied_files_updated_ext"
         all_puid: list = []
-        path_puid_dict: dict = {}
+        path_puid_dict: dict[str, str] = {}
 
         DB_QUERY_GET_FILES = (
             "SELECT relative_path, uuid, puid, warning FROM Files WHERE warning = 'Extension mismatch';"
@@ -150,15 +169,16 @@ def main():
             puid = row[2]
 
             # checks where to find relevant puid
+            # If none are found, replaces them with N/A rn
             if "aca" in puid:
-                new_suffix: str = aca_puid_dict.get(puid)
+                new_suffix: str = tuple_of_puid_dict[0].get(puid, "N/A")
             else:
-                new_suffix: str = puid_to_extensions_dict.get(puid)
+                new_suffix: str = tuple_of_puid_dict[1].get(puid, "N/A")
             
             # constructs the paths to the new files
             absolute_path_file: Path = ROOTPATH / rel_path
             new_filename: str = os.path.basename(absolute_path_file)
-            path_puid: str = path_puid_dict.get(puid)
+            path_puid: str = path_puid_dict.get(puid, "N/A")
             new_file_absolute_path: Path = new_directory_absolute_path / path_puid / new_filename
 
             # maybe use shutil.copyfile instead, should be faster. See if it becomes bottleneck
