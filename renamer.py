@@ -49,7 +49,7 @@ def main(args=None):
     # Handles the arguments form the CLI
     args_parsed: argparse.Namespace = argParser(args)
     db_path = Path(args_parsed.Path)
-    connection: sqlite3.Connection = sqlite3.connect(db_path, uri=True)
+    connection: sqlite3.Connection = sqlite3.connect(db_path)
     puid = str(args_parsed.Puid)
     new_suffix = str(args_parsed.Suffix)
     # Flag argument: cheks wheter to print the dryrun to stdoutput or to a file
