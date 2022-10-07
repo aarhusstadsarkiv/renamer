@@ -87,7 +87,12 @@ def main(args=None):
             continue
         elif args_parsed.dryrun:
             with open(path_to_txt, "a", encoding="utf-8") as f:  # type: ignore
-                f.write(absolute_path.__str__() + " -> " + new_absolute_path.__str__() + "\n    ")
+                f.write(
+                    absolute_path.__str__()
+                    + " -> "
+                    + new_absolute_path.__str__()
+                    + "\n    "
+                )
             continue
         try:
             absolute_path.rename(new_absolute_path)
