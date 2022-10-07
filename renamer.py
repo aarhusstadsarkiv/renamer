@@ -2,9 +2,6 @@ from datetime import datetime
 import sqlite3
 from pathlib import Path
 import argparse
-import json
-import xmltodict
-import xml.etree.ElementTree as ET
 
 
 # handles the parsing of arguments from user input
@@ -48,36 +45,40 @@ def argParser(args) -> argparse.Namespace:
 
 
 def main(args=None):
-    args_parsed: argparse.Namespace = argParser(args)
 
+    # Handles the arguments form the CLI
+    args_parsed: argparse.Namespace = argParser(args)
     db_path = Path(args_parsed.Path)
-    connection: sqlite3.Connection = sqlite3.connect(db_path)
+    connection: sqlite3.Connection = sqlite3.connect(db_path, uri=True)
     puid = str(args_parsed.Puid)
     new_suffix = str(args_parsed.Suffix)
-
+    # Flag argument: cheks wheter to print the dryrun to stdoutput or to a file
+    # if true, print to stdout, if false save to file
     dryrun_print: bool = True
 
+    # Handles conn to database
     ROOTPATH = Path(db_path).parent.parent
     DB_QUERY_GET_FILES: str = (
         f"SELECT relative_path, uuid FROM Files WHERE puid = '{puid}' "
         f"AND warning = 'Extension mismatch';"
     )
-
     cursor: sqlite3.Cursor = connection.cursor()
     cursor.execute(DB_QUERY_GET_FILES)
     rows: list = cursor.fetchall()
-    if len(rows) > 40:
+
+    if len(rows) > 40 and args_parsed.dryrun:
         dryrun_print = False
         print("Number of input files is greater than 40")
         print("Writing the output to txt file instead")
-        timestamp: str = datetime.now.strftime("%Y_%m_%d_%H_%M")
-        path_to_txt: Path = Path(ROOTPATH, ("renamer_dryrun" + timestamp))
+        time: datetime = datetime.now()
+        timestamp: str = time.strftime("%H_%M_%S")
+        path_to_txt: Path = Path(ROOTPATH, ("renamer_dryrun" + timestamp + ".txt"))
         print("Path to the file: ", path_to_txt.__str__())
 
     for row in rows:
         rel_path: str = row[0].replace("\\", "/")
         absolute_path: Path = ROOTPATH / rel_path
-        new_absolute_path: Path = Path(absolute_path, ("." + new_suffix))
+        new_absolute_path: Path = Path(absolute_path.__str__() + new_suffix)
         # if dryrun flag is set, the script skips over the remaining code and just
         # prints the old path and new path for inspection
         # either to stdout or to a file depending on volume
@@ -86,7 +87,7 @@ def main(args=None):
             continue
         elif args_parsed.dryrun:
             with open(path_to_txt, "a", encoding="utf-8") as f:  # type: ignore
-                f.write(absolute_path.__str__() + " -> " + new_absolute_path.__str__())
+                f.write(absolute_path.__str__() + " -> " + new_absolute_path.__str__() + "\n    ")
             continue
         try:
             absolute_path.rename(new_absolute_path)
