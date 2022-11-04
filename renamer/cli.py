@@ -80,7 +80,9 @@ def main():
                     "https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml"
                 )
                 with open(
-                    "national_archive.xml", "w", encoding="utf-8"
+                    Path(__file__).parent / "national_archive.xml",
+                    "w",
+                    encoding="utf-8",
                 ) as national_arc_file:
                     national_arc_file.write(response_national_arc.content)
                     national_arc_file.close()
@@ -88,7 +90,9 @@ def main():
             respons_aca = requests.get(
                 "https://raw.githubusercontent.com/aarhusstadsarkiv/digiarch/master/digiarch/core/custom_sigs.json"
             )
-            with open("aca_file_extension.json", "w", encoding="utf-8") as aca_file:
+            with open(
+                Path(__file__).parent / "aca_file_extension.json", "w", encoding="utf-8"
+            ) as aca_file:
                 data_json = respons_aca.json()
                 json.dump(data_json, fp=aca_file, indent=4)
                 aca_file.close()
@@ -97,7 +101,7 @@ def main():
 
     # creates a dict overview of the puid and the file extensions associated with them
     xml_parser = ET.XMLParser(encoding="utf-8")
-    tree = ET.parse("national_archive.xml", parser=xml_parser)
+    tree = ET.parse(Path(__file__).parent / "national_archive.xml", parser=xml_parser)
     xml_data = tree.getroot()
     xmlstr: str = ET.tostring(xml_data, encoding="utf-8", method="xml")
     data_dict = dict(xmltodict.parse(xmlstr))
