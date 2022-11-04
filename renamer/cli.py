@@ -119,7 +119,7 @@ def main():
         elif isinstance(extension, list):
             puid_to_extensions_dict[puid] = extension[0]
 
-    with open("aca_file_extension.json", "r", encoding="utf-8") as file:
+    with open(Path(__file__).parent / "aca_file_extension.json", "r", encoding="utf-8") as file:
         aca_puid_json = json.load(file)
 
     aca_puid_dict: dict = {}
