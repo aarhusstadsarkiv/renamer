@@ -3,13 +3,13 @@ import contextlib
 import json
 import os
 import shutil
-import sqlite3
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import requests
 import xmltodict
+from acacore.models.file import File
 
 from renamer.renamer_db import RenamerDB
 
@@ -30,7 +30,7 @@ def main():
     data_dict: dict[str, dict] = dict(xmltodict.parse(xmlstr))
     puid_to_extensions_dict: dict = {}
 
-    for entry in data_dict.get("ns0:FFSignatureFile").get("ns0:FileFormatCollection").get("ns0:FileFormat"):
+    for entry in data_dict.get("ns0:FFSignatureFile").get("ns0:FileFormatCollection").get("ns0:FileFormat"):  # type: ignore
         puid: str = entry.get("@PUID")
         extension = entry.get("ns0:Extension")
         if isinstance(extension, str):
@@ -60,7 +60,6 @@ def main():
 
     # actual functionality of the script. Split in two cases: dryrun and normal run¨
     if args.dryrun:
-
         rows = db.get_files_based_on_warning()
 
         with contextlib.suppress(FileExistsError):
@@ -68,7 +67,7 @@ def main():
 
         # gets all relevant puid from the db
         for row in rows:
-            if row[2] not in all_puid:
+            if row.puid not in all_puid:
                 all_puid.append(row[2])
 
         # creates a new directory for all puids
@@ -81,19 +80,19 @@ def main():
 
         # copies files with new extension
         for row in rows:
-            rel_path = row[0].replace("\\", "/")
-            puid = row[2]
+            rel_path = row.relative_path.replace("\\", "/")
+            puid = row.puid
 
             # checks where to find relevant puid
             if "aca" in puid:
-                new_suffix: str = aca_puid_dict.get(puid) # type: ignore
+                new_suffix: str = aca_puid_dict.get(puid)  # type: ignore
             else:
-                new_suffix: str = puid_to_extensions_dict.get(puid) # type: ignore
+                new_suffix: str = puid_to_extensions_dict.get(puid)  # type: ignore
 
             # constructs the paths to the new files
             absolute_path_file: Path = ROOTPATH / rel_path
             new_filename: str = os.path.basename(absolute_path_file)
-            path_puid: str = path_puid_dict.get(puid)
+            path_puid: str = path_puid_dict.get(puid)  # type: ignore
             new_file_absolute_path: Path = new_directory_absolute_path / path_puid / new_filename
 
             # maybe use shutil.copyfile instead, should be faster. See if it becomes bottleneck
@@ -101,7 +100,7 @@ def main():
 
             # an ugly solution to en edge case: two files can have the same name, and when we rename them
             # the renamer throws an error. It is caught and a counter is appended to the file. If this file
-            # also exists it goes back in the loop, increment i and tries again
+            # also exists it goes back in the loop, increments and tries again
             i = 1
             while True:
                 try:
@@ -123,14 +122,14 @@ def main():
                     print(f"Unable to rename {new_file_absolute_path}: {e}", flush=True)
                     break
 
-    # the standart case
+    # the standard case
     else:
         puid = args.Puid
         new_suffix = args.Suffix
 
-        rows: list = db.get_relpath_uuid(puid)
+        rows: list[File] = db.get_files_with_warning_and_puid(puid)  # type: ignore
         for row in rows:
-            rel_path: str = row[0].replace("\\", "/")
+            rel_path: str = row.relative_path.replace("\\", "/")  # type: ignore
             absolute_path: Path = ROOTPATH / rel_path
             try:
                 absolute_path.rename(str(absolute_path) + "." + new_suffix)
@@ -139,11 +138,12 @@ def main():
             except Exception as e:
                 print(f"Unable to rename {absolute_path}: {e}", flush=True)
             else:
-                new_rel_path: str = row[0] + "." + new_suffix
+                new_rel_path: str = row.relative_path + "." + new_suffix
                 try:
-                    db.update_relative_path(new_rel_path=new_rel_path, uuid=row[1])
+                    db.update_relative_path(new_rel_path=new_rel_path, uuid=row.uuid, new_suffix=new_suffix)
                 except Exception as e:
                     print(f"Unable to update db for {new_rel_path}: {e}", flush=True)
+
 
 def make_arg_parser() -> argparse.Namespace:
     """Return an argpaser that has intialized the arguments from sys.args."""
@@ -205,31 +205,31 @@ def make_arg_parser() -> argparse.Namespace:
 
 
 def update_ref_files():
-        try:
-            respons_national_arc = requests.head(
+    try:
+        respons_national_arc = requests.head(
+            "https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml",
+        )
+        if respons_national_arc.status_code == 200:
+            response_national_arc = requests.get(
                 "https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml",
             )
-            if respons_national_arc.status_code == 200:
-                response_national_arc = requests.get(
-                    "https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml",
-                )
-                with open(
-                    Path(__file__).parent / "national_archive.xml",
-                    "w",
-                    encoding="utf-8",
-                ) as national_arc_file:
-                    national_arc_file.write(response_national_arc.content)
-                    national_arc_file.close()
-            respons_aca = requests.get(
-                "https://raw.githubusercontent.com/aarhusstadsarkiv/digiarch/master/digiarch/core/custom_sigs.json",
-            )
-            with open(Path(__file__).parent / "aca_file_extension.json", "w", encoding="utf-8") as aca_file:
-                data_json = respons_aca.json()
-                json.dump(data_json, fp=aca_file, indent=4)
-                aca_file.close()
-        except Exception as e:
-            # Lazy exception handling, but if something goes wrong here it really isn't a big deal.
-            print(f"Error updating extension files: {e}")
+            with open(
+                Path(__file__).parent / "national_archive.xml",
+                "w",
+                encoding="utf-8",
+            ) as national_arc_file:
+                national_arc_file.write(str(response_national_arc.content))
+                national_arc_file.close()
+        respons_aca = requests.get(
+            "https://raw.githubusercontent.com/aarhusstadsarkiv/digiarch/master/digiarch/core/custom_sigs.json",
+        )
+        with open(Path(__file__).parent / "aca_file_extension.json", "w", encoding="utf-8") as aca_file:
+            data_json = respons_aca.json()
+            json.dump(data_json, fp=aca_file, indent=4)
+            aca_file.close()
+    except Exception as e:
+        # Lazy exception handling, but if something goes wrong here it really isn't a big deal.
+        print(f"Error updating extension files: {e}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,11 @@
+import datetime
 from os import PathLike
 from pathlib import Path
-from typing import Any, Union
+from typing import Union
+
+import pydantic
 from acacore.database.files_db import FileDB
+from acacore.models.file import File
 
 
 class RenamerDB(FileDB):
@@ -9,20 +13,25 @@ class RenamerDB(FileDB):
 
     def __init__(self, database: str) -> None:
         super().__init__(database=database)
+        self.files = self.create_table("files", File)
 
-
-    def get_files_based_on_warning(self) -> list[Any]:
-        """Get a records UUID, PUID and warning from the files table, if the record has `warning = 'Extension mismatch'`.
+    def get_files_based_on_warning(self) -> list[File]:
+        """Get a records from the files table, where `warning = 'Extension mismatch'`.
 
         Returns
         -------
-            list[Any]: list of records with UUID and PUID
+            list[File]: list of records
         """
-        result = self.execute("SELECT relative_path, uuid, puid, warning FROM Files WHERE warning = 'Extension mismatch';")
-        return result.fetchall()
+        rows = self.files.select(where="warning = 'Extension mismatch';").fetchall()
+        try:
+            file_validator = pydantic.TypeAdapter(list[File])
+            files = file_validator.validate_python(rows)
+        except pydantic.ValidationError:
+            raise pydantic.ValidationError("Failed to parse files as ArchiveFiles.")
+        return files
 
-    def get_relpath_uuid(self, puid: str) -> list:
-        """Get the `relative_path` and `uuid` from all records with the given `puid`.
+    def get_files_with_warning_and_puid(self, puid: str) -> list[File]:
+        """Get a list of `File` records with the given `puid` annd where warning = 'Extension mismatch'.
 
         Args:
         ----
@@ -30,29 +39,44 @@ class RenamerDB(FileDB):
 
         Returns:
         -------
-            list: A list of the resulting records.
+            list[File]: A list of the resulting records.
         """
-        result = self.execute(f"SELECT relative_path, uuid FROM Files WHERE puid = '{puid}'"
-            f"AND warning = 'Extension mismatch';")
-        return result.fetchall()
-    
-    def update_relative_path(self, new_rel_path: Union[str, PathLike, Path], uuid: str, new_suffix: str) -> None:
-        """Update the relative path for the record with the given uuid and makes a `history` record of the update.
+        rows = self.files.select(where=f"puid = '{puid} AND warning = 'Extension mismatch';").fetchall()
+        try:
+            file_validator = pydantic.TypeAdapter(list[File])
+            files = file_validator.validate_python(rows)
+        except pydantic.ValidationError:
+            raise pydantic.ValidationError("Failed to parse files as ArchiveFiles.")
+        return files
+
+    def update_relative_path(
+        self,
+        new_rel_path: Union[str, PathLike, Path],
+        uuid: str,
+        new_suffix: str,
+        reason: str = "",
+    ) -> None:
+        """Update the relative path for the record with the given uuid and makes a `history` record.
+
+        The `history` record documents the changes that the tool have made to the file.
 
         Args:
         ----
-            new_rel_path (Union[str, PathLike, Path]): The fulle new realtive path, with stem and suffix.
+            new_rel_path (Union[str, PathLike, Path]): The new relative path (with stem and suffix).
             uuid (str): The `UUID` of the file which path should be updated.
-            new_suffix: The new suffix for the file. Is only used to create the `history` record. 
+            new_suffix (str): The new suffix for the file. Is only used to create the `history` record.
+            reason (str): The reason given for the update. Defaults to the empty string
         """
-        new_suffix 
-        
         self.execute(
-                sql=f"UPDATE Files SET relative_path = '{new_rel_path}', "
-                f"warning = 'Corrected extension mismatch' WHERE Files.uuid = '{uuid}'",
-                )
-        
-        self.add_history(uuid=uuid,
-                         operation="renamer: Changed the suffix of the file",
-                         data="Changes suffix from")
+            sql=f"UPDATE Files SET relative_path = '{new_rel_path}', "
+            f"warning = 'Corrected extension mismatch' WHERE Files.uuid = '{uuid}'",
+        )
+
+        self.add_history(
+            uuid=uuid,
+            operation="renamer: Changed the suffix of the file",
+            data=f"Changes suffix to {new_suffix}",
+            reason=reason,
+            time=datetime.datetime.now(),  # noqa: DTZ005
+        )
         self.commit()

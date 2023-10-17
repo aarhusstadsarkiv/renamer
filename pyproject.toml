@@ -30,6 +30,7 @@ disable_error_code = "misc"
 # Because we disallow untyped defs in convertool,
 # check_untyped_defs only has an impact in tests/
 check_untyped_defs = true
+explicit_package_bases = true
 
 [tool.mypy-.venv.'*']
 ignore_errors = true
