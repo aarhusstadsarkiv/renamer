@@ -5,9 +5,10 @@ description = "cli to help with renaming original ingested files with missing or
 authors = ["Claus Juhl Knudsen <cjk@aarhus.dk>"]
 
 [tool.poetry.dependencies]
-python = ">=3.8, <=3.11"
+python = ">=3.9, <=3.11"
 xmltodict = "^0.13.0"
 requests = "^2.28.1"
+acacore = {git = "https://github.com/aarhusstadsarkiv/acacore.git"}
 
 [tool.poetry.scripts]
 renamer = 'renamer.cli:main'
