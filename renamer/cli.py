@@ -1,18 +1,15 @@
 import argparse
 import contextlib
-import json
 import os
 import shutil
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Optional, Union
 
-import requests
-import xmltodict
 from acacore.models.file import File
 
 from renamer.renamer_db import RenamerDB
+from renamer.utils import load_in_external_files, rename_file_and_update_db, update_ref_files
 
 
 def main():
@@ -20,8 +17,12 @@ def main():
     args: argparse.Namespace = make_arg_parser()
 
     # checks if the extension files should be updated
-    if args.update_puid:
-        update_ref_files()
+    try:
+        if args.update_puid:
+            update_ref_files()
+    except AttributeError:
+        # The argument is not in the namespace (the list of arguments), soo we simply move on
+        pass
 
     # A bit of path juggling, to get all the relevant files together.
     db_path: str = args.Path
@@ -53,20 +54,14 @@ def standard_run(puid: str, new_suffix: str, root_path: Path, db: RenamerDB) -> 
     """
     rows: list[File] = db.get_files_with_warning_and_puid(puid)  # type: ignore
     for row in rows:
-        rel_path: str = row.relative_path.replace("\\", "/")  # type: ignore
-        absolute_path: Path = root_path / rel_path
         try:
-            absolute_path.rename(str(absolute_path) + "." + new_suffix)
+            rename_file_and_update_db(file=row, root_path=root_path, new_suffix=new_suffix, db=db)
         except FileNotFoundError:
-            print(f"Could not find file: {absolute_path}", flush=True)
+            print(f"Could not find the file located at {row.relative_path}. "
+                  "The renaming of the file was stopped")
         except Exception as e:
-            print(f"Unable to rename {absolute_path}: {e}", flush=True)
-        else:
-            new_rel_path: str = row.relative_path + "." + new_suffix
-            try:
-                db.update_relative_path(new_rel_path=new_rel_path, uuid=row.uuid, new_suffix=new_suffix)
-            except Exception as e:
-                print(f"Unable to update db for {new_rel_path}: {e}", flush=True)
+            print(f"The renaming of the file threw the following exception: {e}. "
+                  "The renaming of the file was stopped.")
 
 
 def dryrun(
@@ -74,6 +69,16 @@ def dryrun(
     root_path: Path,
     db: RenamerDB,
 ) -> None:
+    """Run as dryrun, where the files are copies into a new dir for manual checking.
+
+    Does NOT create a history entry in the database. This type of run is only meant as a test.
+
+    Args:
+    ----
+        new_directory_absolute_path (Path): the new dir the files are copied into.
+        root_path (Path): The root path of the run
+        db (RenamerDB): The database where the file are to be updated.
+    """
     rows: list[File] = db.get_files_based_on_warning()
     aca_puid_dict, puid_to_extensions_dict = load_in_external_files()
     all_puid: list = []
@@ -141,8 +146,31 @@ def dryrun(
 
 
 def uuid_run(uuid: Union[str, list[str]], new_suffix: str, root_path: Path, db: RenamerDB) -> None:
-    pass
-    # functionality to be developed
+    """Run renamer on a single file or a list of files and updates their extensions.
+
+    Also makes a new history entry to the db detailing what has happened for the file.
+
+    Args:
+    ----
+        uuid (Union[str, list[str]]): A single uuid or a list of uuids
+        new_suffix (str): The new suffix to append to the file
+        root_path (Path): The root path
+        db (RenamerDB): The database to be updated
+    """
+    # firstly, we make sure that the input is a list (makes the later logic easier)
+    if isinstance(uuid, str):
+        files_uuid: list[str] = [uuid]
+
+    # we iterate over the files(s) and append the new suffix to the file stem.
+    for file_uuid in files_uuid:
+        # we get the row
+        row: Optional[File] = db.files.select(where=f"uuid IS {file_uuid}").fetchone()
+        # If the UUID is not present in the db, print it to the user and continue to next iteration
+        if not row:
+            print(f"Error: The UUID {file_uuid} does not exist in the database.")
+            continue
+        # we update the db and rename the file.
+        rename_file_and_update_db(row=row, root_path=root_path, new_suffix=new_suffix, db=db)
 
 
 def make_arg_parser() -> argparse.Namespace:
@@ -160,14 +188,15 @@ def make_arg_parser() -> argparse.Namespace:
         arg_parser.add_argument(
             "Path",
             metavar="path",
-            type=str,
+            type=Path,
             help="the path to the database",
         )
 
         arg_parser.add_argument(
             "Uuid",
             metavar="uuid",
-            type=Union[str, list[str]], # TODO: This might be wrong, the parser might not be able to parse a list
+            type=str,
+            nargs='+',
             help="the uuid or a list of uuids indicating the files which should have their extension updated",
         )
 
@@ -254,74 +283,6 @@ def make_arg_parser() -> argparse.Namespace:
         )
 
     return arg_parser.parse_args()
-
-
-def load_in_external_files() -> Tuple[dict, dict]:
-    """Load in the external files from PRONOM and ACA's own `reference_files`.
-
-    The scripts only loads in local copies of these files, unless we manually update with `--update_puid`.
-
-    Returns
-    -------
-        Tuple[dict, dict]: A tuple, where the first is a dict of ACA's own ID's, and the other is from PRONOM.
-    """
-    # creates a dict overview of the puid and the file extensions associated with them
-    xml_parser = ET.XMLParser(encoding="utf-8")
-    tree = ET.parse(Path(__file__).parent / "national_archive.xml", parser=xml_parser)
-    xml_data = tree.getroot()
-    xmlstr: str = ET.tostring(xml_data, encoding="utf-8", method="xml")
-    data_dict: dict[str, dict] = dict(xmltodict.parse(xmlstr))
-    puid_to_extensions_dict: dict = {}
-
-    for entry in data_dict.get("ns0:FFSignatureFile").get("ns0:FileFormatCollection").get("ns0:FileFormat"):  # type: ignore
-        puid: str = entry.get("@PUID")
-        extension = entry.get("ns0:Extension")
-        if isinstance(extension, str):
-            puid_to_extensions_dict[puid] = extension
-        elif isinstance(extension, list):
-            puid_to_extensions_dict[puid] = extension[0]
-
-    with open(Path(__file__).parent / "aca_file_extension.json", encoding="utf-8") as file:
-        aca_puid_json = json.load(file)
-
-    aca_puid_dict: dict = {}
-    for entry in aca_puid_json:
-        aca_puid: str = entry.get("puid")
-        extension = entry.get("extension")
-        if isinstance(extension, str):
-            aca_puid_dict[aca_puid] = extension.replace(".", "")
-        elif isinstance(extension, list):
-            aca_puid_dict[aca_puid] = extension[0].replace(".", "")
-
-    return (aca_puid_dict, puid_to_extensions_dict)
-
-
-def update_ref_files():
-    try:
-        respons_national_arc = requests.head(
-            "https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml",
-        )
-        if respons_national_arc.status_code == 200:
-            response_national_arc = requests.get(
-                "https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml",
-            )
-            with open(
-                Path(__file__).parent / "national_archive.xml",
-                "w",
-                encoding="utf-8",
-            ) as national_arc_file:
-                national_arc_file.write(str(response_national_arc.content))
-                national_arc_file.close()
-        respons_aca = requests.get(
-            "https://raw.githubusercontent.com/aarhusstadsarkiv/digiarch/master/digiarch/core/custom_sigs.json",
-        )
-        with open(Path(__file__).parent / "aca_file_extension.json", "w", encoding="utf-8") as aca_file:
-            data_json = respons_aca.json()
-            json.dump(data_json, fp=aca_file, indent=4)
-            aca_file.close()
-    except Exception as e:
-        # Lazy exception handling, but if something goes wrong here it really isn't a big deal.
-        print(f"Error updating extension files: {e}")
 
 
 if __name__ == "__main__":
