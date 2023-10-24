@@ -25,7 +25,7 @@ def main():
         pass
 
     # A bit of path juggling, to get all the relevant files together.
-    db_path: str = args.Path
+    db_path: Path = args.Path
     db = RenamerDB(db_path)
     db_parent_direct: Path = Path(db_path).parent
     ROOTPATH: Path = Path(db_path).parent.parent
@@ -217,7 +217,7 @@ def make_arg_parser() -> argparse.Namespace:
         arg_parser.add_argument(
             "Path",
             metavar="path",
-            type=str,
+            type=Path,
             help="the path to the database",
         )
 
@@ -244,7 +244,7 @@ def make_arg_parser() -> argparse.Namespace:
         arg_parser.add_argument(
             "Path",
             metavar="path",
-            type=str,
+            type=Path,
             help="the path to the database",
         )
 

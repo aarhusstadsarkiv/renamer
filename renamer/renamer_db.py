@@ -11,7 +11,7 @@ from acacore.models.file import File
 class RenamerDB(FileDB):
     """Class for handling database calls for `renamer`."""
 
-    def __init__(self, database: str) -> None:
+    def __init__(self, database: Path) -> None:
         super().__init__(database=database)
         self.files = self.create_table("files", File)
 

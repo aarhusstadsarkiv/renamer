@@ -9,7 +9,8 @@ from typing import Tuple
 import requests
 import xmltodict
 from acacore.models.file import File
-from renamer_db import RenamerDB
+
+from renamer.renamer_db import RenamerDB
 
 
 def load_in_external_files() -> Tuple[dict, dict]:
