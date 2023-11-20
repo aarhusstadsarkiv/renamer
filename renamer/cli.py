@@ -1,35 +1,258 @@
-import sqlite3
-import sys
-import os
-from pathlib import Path
-import requests
 import argparse
-import json
+import contextlib
+import os
 import shutil
-import xmltodict
-import xml.etree.ElementTree as ET
+import sys
+from pathlib import Path
+from typing import Optional, Union
+
+from acacore.models.file import File
+
+from renamer.renamer_db import RenamerDB
+from renamer.utils import load_in_external_files, rename_file_and_update_db, update_ref_files
 
 
 def main():
+    # Read the arguments given from the command line.
+    args: argparse.Namespace = make_arg_parser()
+
+    # checks if the extension files should be updated
+    try:
+        if args.update_puid:
+            update_ref_files()
+    except AttributeError:
+        # The argument is not in the namespace (the list of arguments), soo we simply move on
+        pass
+
+    # A bit of path juggling, to get all the relevant files together.
+    db_path: Path = args.Path
+    db = RenamerDB(db_path)
+    db_parent_direct: Path = Path(db_path).parent
+    ROOTPATH: Path = Path(db_path).parent.parent
+    new_directory_absolute_path: Path = db_parent_direct / "copied_files_updated_ext"
+
+    # actual functionality of the script. Split based on what flags are set.
+    if args.dryrun:
+        dryrun(new_directory_absolute_path=new_directory_absolute_path, root_path=ROOTPATH, db=db)
+    elif args.update_based_on_uuids:
+        uuid_run(uuid=args.uuid, new_suffix=args.suffix, root_path=ROOTPATH, db=db)
+    else:
+        standard_run(puid=args.puid, new_suffix=args.suffix, root_path=ROOTPATH, db=db)
+
+
+def standard_run(puid: str, new_suffix: str, root_path: Path, db: RenamerDB) -> None:
+    """Run with no additional flags set.
+
+    Simply takes the relevant files based on PUID and updates their suffix.
+
+    Args:
+    ----
+        puid (str): The puid of the files t update the suffix of
+        new_suffix (str): the new suffix to give the files
+        root_path (Path): The root_path, based on where the files.db is located
+        db (RenamerDB): The database handler.
+    """
+    rows: list[File] = db.get_files_with_warning_and_puid(puid)  # type: ignore
+    for row in rows:
+        try:
+            rename_file_and_update_db(file=row, root_path=root_path, new_suffix=new_suffix, db=db)
+        except FileNotFoundError:
+            print(f"Could not find the file located at {row.relative_path}. "
+                  "The renaming of the file was stopped")
+        except Exception as e:
+            print(f"The renaming of the file threw the following exception: {e}. "
+                  "The renaming of the file was stopped.")
+
+
+def dryrun(
+    new_directory_absolute_path: Path,
+    root_path: Path,
+    db: RenamerDB,
+) -> None:
+    """Run as dryrun, where the files are copies into a new dir for manual checking.
+
+    Does NOT create a history entry in the database. This type of run is only meant as a test.
+
+    Args:
+    ----
+        new_directory_absolute_path (Path): the new dir the files are copied into.
+        root_path (Path): The root path of the run
+        db (RenamerDB): The database where the file are to be updated.
+    """
+    rows: list[File] = db.get_files_based_on_warning()
+    aca_puid_dict, puid_to_extensions_dict = load_in_external_files()
+    all_puid: list = []
+    path_puid_dict: dict = {}
+
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(new_directory_absolute_path)
+
+    # gets all relevant puid from the db
+    for row in rows:
+        if row.puid not in all_puid:
+            all_puid.append(row[2])
+
+    # creates a new directory for all puids
+    # also makes a dict to translate between puid and path compliant puid
+    for puid in all_puid:
+        path_puid = puid.replace("/", "-")
+        path_puid_dict[puid] = path_puid
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(new_directory_absolute_path / path_puid)
+
+    # copies files with new extension
+    for row in rows:
+        rel_path = row.relative_path.replace("\\", "/")
+        puid = row.puid
+
+        # checks where to find relevant puid
+        if "aca" in puid:
+            new_suffix: str = aca_puid_dict.get(puid)  # type: ignore
+        else:
+            new_suffix: str = puid_to_extensions_dict.get(puid)  # type: ignore
+
+        # constructs the paths to the new files
+        absolute_path_file: Path = root_path / rel_path
+        new_filename: str = os.path.basename(absolute_path_file)
+        path_puid: str = path_puid_dict.get(puid)  # type: ignore
+        new_file_absolute_path: Path = new_directory_absolute_path / path_puid / new_filename
+
+        # maybe use shutil.copyfile instead, should be faster. See if it becomes bottleneck
+        shutil.copy2(absolute_path_file, new_directory_absolute_path / path_puid)
+
+        # an ugly solution to en edge case: two files can have the same name, and when we rename them
+        # the renamer throws an error. It is caught and a counter is appended to the file. If this file
+        # also exists it goes back in the loop, increments and tries again
+        i = 1
+        while True:
+            try:
+                new_file_absolute_path.rename(str(new_file_absolute_path) + "." + new_suffix)
+                break
+            except FileNotFoundError:
+                print(f"Could not find file: {new_file_absolute_path}", flush=True)
+                break
+            except OSError:
+                try:
+                    new_file_absolute_path.rename(
+                        str(new_file_absolute_path) + "(" + str(i) + ")" + "." + new_suffix,
+                    )
+                    break
+                except OSError:
+                    i += 1
+                    continue
+            except Exception as e:
+                print(f"Unable to rename {new_file_absolute_path}: {e}", flush=True)
+                break
+
+
+def uuid_run(uuid: Union[str, list[str]], new_suffix: str, root_path: Path, db: RenamerDB) -> None:
+    """Run renamer on a single file or a list of files and updates their extensions.
+
+    Also makes a new history entry to the db detailing what has happened for the file.
+
+    Args:
+    ----
+        uuid (Union[str, list[str]]): A single uuid or a list of uuids
+        new_suffix (str): The new suffix to append to the file
+        root_path (Path): The root path
+        db (RenamerDB): The database to be updated
+    """
+    # firstly, we make sure that the input is a list (makes the later logic easier)
+    if isinstance(uuid, str):
+        files_uuid: list[str] = [uuid]
+
+    # we iterate over the files(s) and append the new suffix to the file stem.
+    for file_uuid in files_uuid:
+        # we get the row
+        row: Optional[File] = db.files.select(where=f"uuid IS {file_uuid}").fetchone()
+        # If the UUID is not present in the db, print it to the user and continue to next iteration
+        if not row:
+            print(f"Error: The UUID {file_uuid} does not exist in the database.")
+            continue
+        # we update the db and rename the file.
+        rename_file_and_update_db(row=row, root_path=root_path, new_suffix=new_suffix, db=db)
+
+
+def make_arg_parser() -> argparse.Namespace:
+    """Return an argpaser that has intialized the arguments from sys.args."""
     arg_parser = argparse.ArgumentParser(
         prog="renamer",
         description="cli tool to help with renaming original ingested files with missing or wrong extension",
-        usage="%(prog)s [options] path puid suffix",
+        usage="%(prog)s [options] path_to_database puid suffix",
         epilog="",
     )
 
     # the if statement is there to handle the dryrun case,
     # some duplicate code, but there does not seem to be an elegant fix
-    if "--dryrun" not in sys.argv:
+    if "--update_based_on_uuids" in sys.argv:
         arg_parser.add_argument(
-            "Path", metavar="path", type=str, help="the path to the database"
+            "Path",
+            metavar="path",
+            type=Path,
+            help="the path to the database",
+        )
+
+        arg_parser.add_argument(
+            "Uuid",
+            metavar="uuid",
+            type=str,
+            nargs='+',
+            help="the uuid or a list of uuids indicating the files which should have their extension updated",
+        )
+
+        arg_parser.add_argument(
+            "Suffix",
+            metavar="suffix",
+            type=str,
+            help="the suffix to be appended to the file(s)",
+        )
+
+        arg_parser.add_argument(
+            "--update_based_on_uuids",
+            action="store_true",
+            help="Updates files based on one or more given UUID. "
+            "Overrides default functionality and takes a uuid or a list of uuid instead of a puid",
+        )
+    if "--dryrun" in sys.argv:
+        arg_parser.add_argument(
+            "Path",
+            metavar="path",
+            type=Path,
+            help="the path to the database",
+        )
+
+        arg_parser.add_argument(
+            "--dryrun",
+            action="store_true",
+            help="finds and copies the mismatched files to a new folder and adds the recommended file "
+            "extension to the copies. Overrides normal functionality, only requires an path to the database",
+        )
+
+        arg_parser.add_argument(
+            "--update_puid",
+            action="store_true",
+            help="updates the puid's associated with file extensions from the relevant repositories",
+        )
+
+        arg_parser.add_argument(
+            "--update_based_on_uuids",
+            action="store_true",
+            help="Updates files based on one or more given UUID. "
+            "Overrides default functionality and takes a uuid or a list of uuid instead of a puid",
+        )
+    elif "--dryrun" not in sys.argv and "--update_based_on_uuids" not in sys.argv:
+        arg_parser.add_argument(
+            "Path",
+            metavar="path",
+            type=Path,
+            help="the path to the database",
         )
 
         arg_parser.add_argument(
             "Puid",
             metavar="puid",
             type=str,
-            help="the puid of the files wich should have their extension updated",
+            help="the puid of the files which should have their extension updated",
         )
 
         arg_parser.add_argument(
@@ -42,231 +265,24 @@ def main():
         arg_parser.add_argument(
             "--dryrun",
             action="store_true",
-            help="finds and copies the mismatched files to a new folder and adds the recommended file extension to the copies. Overrrides normal functionality, only requires an path to the database",
+            help="finds and copies the mismatched files to a new folder and adds the recommended file "
+            "extension to the copies. Overrides normal functionality, only requires an path to the database",
         )
 
         arg_parser.add_argument(
             "--update_puid",
             action="store_true",
-            help="updates the puid's associeted with file extensions from the relevant repositories",
-        )
-    else:
-        arg_parser.add_argument(
-            "Path", metavar="path", type=str, help="the path to the database"
+            help="updates the puid's associated with file extensions from the relevant repositories",
         )
 
         arg_parser.add_argument(
-            "--dryrun",
+            "--update_based_on_uuids",
             action="store_true",
-            help="finds and copies the mismatched files to a new folder and adds the recommended file extension to the copies. Overrrides normal functionality, only requires an path to the database",
+            help="Updates files based on one or more given UUID. "
+            "Overrides default functionality and takes a uuid or a list of uuid instead of a puid",
         )
 
-        arg_parser.add_argument(
-            "--update_puid",
-            action="store_true",
-            help="updates the puid's associeted with file extensions from the relevant repositories",
-        )
-
-    args = arg_parser.parse_args()
-
-    # checks if the extension files can be updated if the --update flag is set
-    if args.update_puid:
-        try:
-            respons_national_arc = requests.head(
-                "https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml"
-            )
-            if respons_national_arc.status_code == 200:
-                response_national_arc = requests.get(
-                    "https://cdn.nationalarchives.gov.uk/documents/DROID_SignatureFile_V107.xml"
-                )
-                with open(
-                    Path(__file__).parent / "national_archive.xml",
-                    "w",
-                    encoding="utf-8",
-                ) as national_arc_file:
-                    national_arc_file.write(response_national_arc.content)
-                    national_arc_file.close()
-
-            respons_aca = requests.get(
-                "https://raw.githubusercontent.com/aarhusstadsarkiv/digiarch/master/digiarch/core/custom_sigs.json"
-            )
-            with open(
-                Path(__file__).parent / "aca_file_extension.json", "w", encoding="utf-8"
-            ) as aca_file:
-                data_json = respons_aca.json()
-                json.dump(data_json, fp=aca_file, indent=4)
-                aca_file.close()
-        except Exception as e:
-            print(f"Error updating extension files: {e}")
-
-    # creates a dict overview of the puid and the file extensions associated with them
-    xml_parser = ET.XMLParser(encoding="utf-8")
-    tree = ET.parse(Path(__file__).parent / "national_archive.xml", parser=xml_parser)
-    xml_data = tree.getroot()
-    xmlstr: str = ET.tostring(xml_data, encoding="utf-8", method="xml")
-    data_dict = dict(xmltodict.parse(xmlstr))
-    puid_to_extensions_dict: dict = {}
-
-    for entry in (
-        data_dict.get("ns0:FFSignatureFile")
-        .get("ns0:FileFormatCollection")
-        .get("ns0:FileFormat")
-    ):
-        puid: str = entry.get("@PUID")
-        extension = entry.get("ns0:Extension")
-        if isinstance(extension, str):
-            puid_to_extensions_dict[puid] = extension
-        elif isinstance(extension, list):
-            puid_to_extensions_dict[puid] = extension[0]
-
-    with open(Path(__file__).parent / "aca_file_extension.json", "r", encoding="utf-8") as file:
-        aca_puid_json = json.load(file)
-
-    aca_puid_dict: dict = {}
-    for entry in aca_puid_json:
-        aca_puid: str = entry.get("puid")
-        extension = entry.get("extension")
-        if isinstance(extension, str):
-            aca_puid_dict[aca_puid] = extension.replace(".", "")
-        elif isinstance(extension, list):
-            aca_puid_dict[aca_puid] = extension[0].replace(".", "")
-
-    # actual functionality of the script. Split in two cases: dryrun and normal run¨
-    if args.dryrun:
-        db_path = args.Path
-        db_parent_direct = Path(db_path).parent
-        ROOTPATH = Path(db_path).parent.parent
-        new_directory_absolute_path: Path = (
-            db_parent_direct / "copied_files_updated_ext"
-        )
-        all_puid: list = []
-        path_puid_dict: dict = {}
-
-        DB_QUERY_GET_FILES = "SELECT relative_path, uuid, puid, warning FROM Files WHERE warning = 'Extension mismatch';"
-
-        connection = sqlite3.connect(db_path)
-        cursor = connection.cursor()
-
-        cursor.execute(DB_QUERY_GET_FILES)
-        rows = cursor.fetchall()
-
-        try:
-            os.mkdir(new_directory_absolute_path)
-        except FileExistsError:
-            # the directory could have been created during another, failed run
-            pass
-
-        # gets all relevant puid from the db
-        for row in rows:
-            if row[2] not in all_puid:
-                all_puid.append(row[2])
-
-        # creates a new directory for all puids
-        # also makes a dict to translate between puid and path compliant puid
-        for puid in all_puid:
-            path_puid = puid.replace("/", "-")
-            path_puid_dict[puid] = path_puid
-            try:
-                os.mkdir(new_directory_absolute_path / path_puid)
-            except FileExistsError:
-                # the directory could have been created during another, failed run
-                pass
-
-        # copies files with new extension
-        for row in rows:
-            rel_path = row[0].replace("\\", "/")
-            puid = row[2]
-
-            # checks where to find relevant puid
-            if "aca" in puid:
-                new_suffix: str = aca_puid_dict.get(puid)
-            else:
-                new_suffix: str = puid_to_extensions_dict.get(puid)
-
-            # constructs the paths to the new files
-            absolute_path_file: Path = ROOTPATH / rel_path
-            new_filename: str = os.path.basename(absolute_path_file)
-            path_puid: str = path_puid_dict.get(puid)
-            new_file_absolute_path: Path = (
-                new_directory_absolute_path / path_puid / new_filename
-            )
-
-            # maybe use shutil.copyfile instead, should be faster. See if it becomes bottleneck
-            shutil.copy2(absolute_path_file, new_directory_absolute_path / path_puid)
-
-            # an ugly solution to en edge case: two files can have the same name, and when we rename them
-            # the renamer throws an error. It is caugth and a counter is appended to the file. If this file
-            # also exists it goes back in the loop, increment i and tries again
-            i = 1
-            while True:
-                try:
-                    new_file_absolute_path.rename(
-                        str(new_file_absolute_path) + "." + new_suffix
-                    )
-                    break
-                except FileNotFoundError:
-                    print(f"Could not find file: {new_file_absolute_path}", flush=True)
-                    break
-                except WindowsError:
-                    try:
-                        new_file_absolute_path.rename(
-                            str(new_file_absolute_path)
-                            + "("
-                            + str(i)
-                            + ")"
-                            + "."
-                            + new_suffix
-                        )
-                        break
-                    except WindowsError:
-                        i += 1
-                        continue
-                except Exception as e:
-                    print(f"Unable to rename {new_file_absolute_path}: {e}", flush=True)
-                    break
-
-        connection.commit()
-        connection.close()
-
-    # the standart case
-    else:
-        db_path = args.Path
-        puid = args.Puid
-        new_suffix = args.Suffix
-
-        ROOTPATH = Path(db_path).parent.parent
-        DB_QUERY_GET_FILES: str = (
-            f"SELECT relative_path, uuid FROM Files WHERE puid = '{puid}' "
-            f"AND warning = 'Extension mismatch';"
-        )
-
-        connection = sqlite3.connect(db_path)
-        cursor = connection.cursor()
-
-        cursor.execute(DB_QUERY_GET_FILES)
-        rows: list = cursor.fetchall()
-        for row in rows:
-            rel_path: str = row[0].replace("\\", "/")
-            absolute_path: Path = ROOTPATH / rel_path
-            try:
-                absolute_path.rename(str(absolute_path) + "." + new_suffix)
-            except FileNotFoundError:
-                print(f"Could not find file: {absolute_path}", flush=True)
-            except Exception as e:
-                print(f"Unable to rename {absolute_path}: {e}", flush=True)
-            else:
-                new_rel_path: str = row[0] + "." + new_suffix
-                update_query: str = (
-                    f"UPDATE Files SET relative_path = '{new_rel_path}', "
-                    f"warning = 'Corrected extension mismatch' WHERE Files.uuid = '{row[1]}'"
-                )
-                try:
-                    cursor.execute(update_query)
-                except Exception as e:
-                    print(f"Unable to update db for {new_rel_path}: {e}", flush=True)
-
-        connection.commit()
-        connection.close()
+    return arg_parser.parse_args()
 
 
 if __name__ == "__main__":
